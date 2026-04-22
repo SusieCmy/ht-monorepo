@@ -1,0 +1,1 @@
+# 纯函数工具（format / date / constants）；避免 lib 顶层变扁平。

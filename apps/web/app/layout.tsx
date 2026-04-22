@@ -1,7 +1,8 @@
-import { Geist, Geist_Mono, Instrument_Sans } from "next/font/google"
+import { Geist_Mono, Instrument_Sans } from "next/font/google"
 
 import "@workspace/ui/globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
+import { QueryProvider } from "@/components/providers/query-provider"
+import { ThemeProvider } from "@/components/providers/theme-provider"
 import { cn } from "@workspace/ui/lib/utils";
 
 const instrumentSans = Instrument_Sans({subsets:['latin'],variable:'--font-sans'})
@@ -23,7 +24,9 @@ export default function RootLayout({
       className={cn("antialiased", fontMono.variable, "font-sans", instrumentSans.variable)}
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <QueryProvider>
+          <ThemeProvider>{children}</ThemeProvider>
+        </QueryProvider>
       </body>
     </html>
   )

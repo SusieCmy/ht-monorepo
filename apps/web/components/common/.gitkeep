@@ -1,0 +1,2 @@
+# 跨模块复用的业务组件放这里（page-header、empty-state、data-table 等）。
+# 一旦某个组件被两个以上模块引用，就从 features/<module>/components/ 提升到这里。
