@@ -13,9 +13,13 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
+  IconAlertTriangle,
+  IconBook2,
   IconDashboard,
   IconKey,
   IconLogout,
+  IconPackageExport,
+  IconPackageImport,
   IconSettings,
   IconShieldLock,
   IconSparkles,
@@ -57,6 +61,14 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "仓储管理",
+    items: [
+      { title: "入库管理", href: "/inbound", icon: IconPackageImport },
+      { title: "出库管理", href: "/outbound", icon: IconPackageExport },
+      { title: "预警", href: "/alerts", icon: IconAlertTriangle },
+    ],
+  },
+  {
     label: "权限管理",
     items: [
       { title: "用户", href: "/users", icon: IconUsers },
@@ -67,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "系统",
     items: [
+      { title: "字典管理", href: "/dictionaries", icon: IconBook2 },
       { title: "系统设置", href: "/settings", icon: IconSettings },
     ],
   },
