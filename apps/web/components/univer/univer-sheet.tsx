@@ -8,13 +8,8 @@ import sheetsCoreZhCN from "@univerjs/preset-sheets-core/locales/zh-CN"
 import { UniverSheetsDataValidationPreset } from "@univerjs/preset-sheets-data-validation"
 import dataValidationZhCN from "@univerjs/preset-sheets-data-validation/locales/zh-CN"
 
-import { UniverMCPPlugin } from "@univerjs-pro/mcp"
-import { UniverMCPUIPlugin, zhCN as mcpUiZhCN } from "@univerjs-pro/mcp-ui"
-import { UniverSheetMCPPlugin } from "@univerjs-pro/sheets-mcp"
-
 import "@univerjs/preset-sheets-core/lib/index.css"
 import "@univerjs/preset-sheets-data-validation/lib/index.css"
-import "@univerjs-pro/mcp-ui/lib/index.css"
 
 type UniverAPI = ReturnType<typeof createUniver>["univerAPI"]
 
@@ -39,6 +34,11 @@ export type Filters = Record<number, FilterCriterion | null | undefined>
 export interface UniverSheetApi {
   syncColumns: (columns: Column[]) => void
   applyFilters: (filters: Filters) => void
+  setRows: (rows: (string | number | null)[][]) => void
+  getRowData: (row: number) => (string | number | null)[]
+  onSelectionChange: (cb: (row: number) => void) => () => void
+  getRowHeights: () => number[]
+  getMaxRows: () => number
 }
 
 // Excel-style 1900 date system anchor: serial 1 = 1900-01-01.
@@ -127,17 +127,15 @@ function isCriterionActive(c: FilterCriterion): boolean {
 export interface UniverSheetProps {
   workbookId?: string
   workbookName?: string
-  sessionId?: string
-  apiKey?: string
-  /** 初始列，仅在挂载时用于生成工作簿。之后变更走 onApi.syncColumns。 */
   initialColumns?: Column[]
-  /** 工作表默认行数。 */
   rowCount?: number
-  /** 预留列数，实际列数 = max(initialColumns.length, reservedColumnCount)。 */
   reservedColumnCount?: number
-  /** 初始化完成后回调一次，交出命令式 API。 */
   onApi?: (api: UniverSheetApi) => void
   className?: string
+  /** 条形码列的列索引，该列单元格渲染为可点击按钮 */
+  barcodeColumnIndex?: number
+  /** 点击条形码按钮时回调，参数为行索引 */
+  onBarcodeClick?: (row: number) => void
 }
 
 const HEADER_STYLE = {
@@ -161,13 +159,13 @@ function buildColumnsCfg(columns: Column[]) {
 export function UniverSheet({
   workbookId = "hh-admin-inbound",
   workbookName = "入库单",
-  sessionId = "hh-admin-inbound",
-  apiKey,
   initialColumns = [],
   rowCount = 200,
   reservedColumnCount = 20,
   onApi,
   className,
+  barcodeColumnIndex,
+  onBarcodeClick,
 }: UniverSheetProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<UniverAPI | null>(null)
@@ -175,6 +173,8 @@ export function UniverSheet({
 
   const onApiRef = useRef(onApi)
   onApiRef.current = onApi
+  const onBarcodeClickRef = useRef(onBarcodeClick)
+  onBarcodeClickRef.current = onBarcodeClick
 
   useEffect(() => {
     const container = containerRef.current
@@ -190,22 +190,42 @@ export function UniverSheet({
             {},
             sheetsCoreZhCN,
             dataValidationZhCN,
-            mcpUiZhCN,
           ),
         },
         presets: [
-          // ribbonType: 'simple' 关掉 开始/公式/数据 的多 tab 切换，
-          // 保留常用工具按钮的单行工具条。
-          UniverSheetsCorePreset({ container, ribbonType: "simple" }),
-          // showEditOnDropdown: false 去掉选择下拉最底部"编辑"入口，
-          // 防止终端用户直接改表格的数据校验规则。
+          UniverSheetsCorePreset({
+            container,
+            ribbonType: "simple",
+            menu: {
+              // 隐藏布局/对齐
+              "sheet.command.set-horizontal-text-align": { hidden: true },
+              "sheet.command.set-vertical-text-align": { hidden: true },
+              "sheet.command.set-text-wrap": { hidden: true },
+              "sheet.command.set-text-rotation": { hidden: true },
+              "sheet.command.add-worksheet-merge": { hidden: true },
+              // 隐藏工具
+              "sheet.command.set-once-format-painter": { hidden: true },
+              "sheet.command.clear-selection-all": { hidden: true },
+              "sheet.command.add-range-protection-from-toolbar": { hidden: true },
+              // 隐藏数据
+              "sheet.toolbar.text-to-number": { hidden: true },
+              // 隐藏公式
+              "formula-ui.operation.insert-function.common": { hidden: true },
+              "formula-ui.operation.insert-function.financial": { hidden: true },
+              "formula-ui.operation.insert-function.logical": { hidden: true },
+              "formula-ui.operation.insert-function.text": { hidden: true },
+              "formula-ui.operation.insert-function.date": { hidden: true },
+              "formula-ui.operation.insert-function.lookup": { hidden: true },
+              "formula-ui.operation.insert-function.math": { hidden: true },
+              "formula-ui.operation.insert-function.statistical": { hidden: true },
+              "formula-ui.operation.insert-function.engineering": { hidden: true },
+              "formula-ui.operation.insert-function.information": { hidden: true },
+              "formula-ui.operation.insert-function.database": { hidden: true },
+            },
+          }),
           UniverSheetsDataValidationPreset({ showEditOnDropdown: false }),
         ],
-        plugins: [
-          [UniverMCPPlugin, { enableAuth: true, sessionId }],
-          [UniverMCPUIPlugin, { showStatus: false, showDeveloperTools: false }],
-          UniverSheetMCPPlugin,
-        ],
+        plugins: [],
       })
 
       apiRef.current = univerAPI
@@ -232,6 +252,49 @@ export function UniverSheet({
 
       const getSheet = () =>
         univerAPI.getActiveWorkbook()?.getActiveSheet() ?? null
+
+      // 注册条形码列单元格渲染器
+      if (barcodeColumnIndex !== undefined) {
+        univerAPI.getSheetHooks().onCellRender([{
+          zIndex: 10,
+          drawWith(ctx, info) {
+            const { row, col, primaryWithCoord } = info
+            if (col !== barcodeColumnIndex) return
+            const { startX, startY, endX, endY } = primaryWithCoord
+            const w = endX - startX
+            const h = endY - startY
+            const cx = startX + w / 2
+            const cy = startY + h / 2
+            const r = Math.min(w, h) * 0.3
+            // 画圆形按钮背景
+            ctx.save()
+            ctx.fillStyle = "#f3f4f6"
+            ctx.strokeStyle = "#d1d5db"
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.arc(cx, cy, r, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.stroke()
+            // 画条形码图标（三条竖线）
+            ctx.fillStyle = "#374151"
+            const barW = r * 0.18
+            const barH = r * 0.9
+            const gap = r * 0.28
+            for (let i = -1; i <= 1; i++) {
+              ctx.fillRect(cx + i * gap - barW / 2, cy - barH / 2, barW, barH)
+            }
+            ctx.restore()
+          },
+          isHit(pos, info) {
+            if (info.col !== barcodeColumnIndex) return false
+            const { startX, startY, endX, endY } = info.primaryWithCoord
+            return pos.x >= startX && pos.x <= endX && pos.y >= startY && pos.y <= endY
+          },
+          onPointerDown(info) {
+            onBarcodeClickRef.current?.(info.row)
+          },
+        }])
+      }
 
       // Paint custom column header (the A/B/C bar itself) with our names.
       // FWorksheet#customizeColumnHeader stores the config on the render
@@ -396,6 +459,48 @@ export function UniverSheet({
             if (hide) ws.hideRows(r, 1)
           }
         },
+        setRows(rows) {
+          const ws = getSheet()
+          if (!ws) return
+          rows.forEach((row, r) => {
+            row.forEach((val, c) => {
+              ws.getRange(r, c).setValue(val ?? "")
+            })
+          })
+        },
+        getRowData(row) {
+          const ws = getSheet()
+          if (!ws) return []
+          const maxCols = ws.getMaxColumns()
+          const result: (string | number | null)[] = []
+          for (let c = 0; c < maxCols; c++) {
+            const v = ws.getRange(row, c).getValue()
+            result.push(v == null ? null : (v as string | number))
+          }
+          return result
+        },
+        onSelectionChange(cb) {
+          const handler = () => {
+            const ws = getSheet()
+            if (!ws) return
+            const range = ws.getActiveRange()
+            if (!range) return
+            cb(range.getRow())
+          }
+          container.addEventListener("pointerup", handler)
+          return () => container.removeEventListener("pointerup", handler)
+        },
+        getRowHeights() {
+          const ws = getSheet()
+          if (!ws) return []
+          const max = ws.getMaxRows()
+          const heights: number[] = []
+          for (let r = 0; r < max; r++) heights.push(ws.getRowHeight(r))
+          return heights
+        },
+        getMaxRows() {
+          return getSheet()?.getMaxRows() ?? 0
+        },
       }
 
       onApiRef.current?.(api)
@@ -414,7 +519,7 @@ export function UniverSheet({
       }
     }
      
-  }, [workbookId, sessionId, apiKey])
+  }, [workbookId])
 
   if (error) {
     return (

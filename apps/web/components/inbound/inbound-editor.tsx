@@ -1,9 +1,12 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { IconFilter, IconPencil, IconPlus, IconX } from "@tabler/icons-react"
+import { IconBarcode, IconFilter, IconPencil, IconPlus, IconX } from "@tabler/icons-react"
+import dynamic from "next/dynamic"
 import { Popover } from "radix-ui"
+
+const Barcode = dynamic(() => import("react-barcode").then((m) => ({ default: m.default })), { ssr: false })
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -26,6 +29,7 @@ const TYPE_OPTIONS: Array<{ value: ColumnType; label: string }> = [
 ]
 
 const DEFAULT_COLUMNS: Column[] = [
+  { id: "c-barcode", name: "条形码", type: "text", filterable: false },
   { id: "c-sku", name: "SKU", type: "text", filterable: false },
   { id: "c-product", name: "商品名称", type: "text", filterable: false },
   { id: "c-batch", name: "批次号", type: "text", filterable: false },
@@ -39,6 +43,8 @@ const DEFAULT_COLUMNS: Column[] = [
     filterOptions: ["华源", "顺丰", "京东物流"],
   },
 ]
+
+const BARCODE_COL_INDEX = 0
 
 // 每种 column type 对应的筛选 criterion 判别式；edit 面板和筛选条都靠它分流。
 type CriterionKind = FilterCriterion["kind"]
@@ -87,11 +93,34 @@ export function InboundEditor() {
 
   const apiRef = useRef<UniverSheetApi | null>(null)
   const initialColumnsRef = useRef(columns)
+  const [barcodeOpen, setBarcodeOpen] = useState(false)
+  const [barcodeValue, setBarcodeValue] = useState("")
 
   const handleApi = useCallback((api: UniverSheetApi) => {
     apiRef.current = api
     apiRef.current?.applyFilters(filters)
-    // NOTE: intentionally read-once; ref captured via closure.
+    api.setRows([
+      ["", "SKU-001", "苹果 iPhone 15", "BT-2024-001", 50, "2026-01-05", "华源"],
+      ["", "SKU-002", "三星 Galaxy S24", "BT-2024-002", 30, "2026-01-08", "顺丰"],
+      ["", "SKU-003", "小米 14 Pro", "BT-2024-003", 80, "2026-01-10", "京东物流"],
+      ["", "SKU-004", "华为 Mate 60", "BT-2024-004", 45, "2026-01-12", "华源"],
+      ["", "SKU-005", "OPPO Find X7", "BT-2024-005", 60, "2026-01-15", "顺丰"],
+      ["", "SKU-006", "vivo X100", "BT-2024-006", 25, "2026-01-18", "京东物流"],
+      ["", "SKU-007", "荣耀 Magic6", "BT-2024-007", 70, "2026-01-20", "华源"],
+      ["", "SKU-008", "一加 12", "BT-2024-008", 35, "2026-01-22", "顺丰"],
+      ["", "SKU-009", "索尼 Xperia 1 VI", "BT-2024-009", 20, "2026-01-25", "京东物流"],
+      ["", "SKU-010", "谷歌 Pixel 8", "BT-2024-010", 15, "2026-01-28", "华源"],
+      ["", "SKU-011", "苹果 iPad Pro", "BT-2024-011", 40, "2026-02-01", "顺丰"],
+      ["", "SKU-012", "三星 Tab S9", "BT-2024-012", 55, "2026-02-03", "京东物流"],
+      ["", "SKU-013", "小米平板 6", "BT-2024-013", 65, "2026-02-05", "华源"],
+      ["", "SKU-014", "华为 MatePad Pro", "BT-2024-014", 30, "2026-02-08", "顺丰"],
+      ["", "SKU-015", "联想小新 Pad", "BT-2024-015", 90, "2026-02-10", "京东物流"],
+      ["", "SKU-016", "苹果 MacBook Air", "BT-2024-016", 20, "2026-02-12", "华源"],
+      ["", "SKU-017", "戴尔 XPS 15", "BT-2024-017", 18, "2026-02-15", "顺丰"],
+      ["", "SKU-018", "联想 ThinkPad X1", "BT-2024-018", 22, "2026-02-18", "京东物流"],
+      ["", "SKU-019", "华硕 ZenBook 14", "BT-2024-019", 35, "2026-02-20", "华源"],
+      ["", "SKU-020", "惠普 Spectre x360", "BT-2024-020", 28, "2026-02-22", "顺丰"],
+    ])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -318,14 +347,43 @@ export function InboundEditor() {
         </div>
       )}
 
-      <UniverSheetLazy
-        className="h-[720px] w-full"
-        workbookId="hh-admin-inbound"
-        workbookName="入库单"
-        sessionId="hh-admin-inbound"
-        initialColumns={initialColumnsRef.current}
-        onApi={handleApi}
-      />
+      <div className="relative">
+        <UniverSheetLazy
+          className="h-[720px] w-full"
+          workbookId="hh-admin-inbound"
+          workbookName="入库单"
+          initialColumns={initialColumnsRef.current}
+          onApi={handleApi}
+          barcodeColumnIndex={BARCODE_COL_INDEX}
+          onBarcodeClick={(row) => {
+            const data = apiRef.current?.getRowData(row) ?? []
+            const sku = String(data[1] ?? "")
+            if (!sku) return
+            setBarcodeValue(sku)
+            setBarcodeOpen(true)
+          }}
+        />
+      </div>
+
+      {barcodeOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setBarcodeOpen(false)}
+        >
+          <div
+            className="bg-card rounded-xl p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-medium">条形码 · {barcodeValue}</span>
+              <button onClick={() => setBarcodeOpen(false)}>
+                <IconX className="size-4" />
+              </button>
+            </div>
+            <Barcode value={barcodeValue} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
