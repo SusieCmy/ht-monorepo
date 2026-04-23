@@ -11,6 +11,7 @@ import {
 } from "react"
 import { Rnd } from "react-rnd"
 import { toPng } from "html-to-image"
+import Barcode from "react-barcode"
 import {
   IconBarcode,
   IconDeviceFloppy,
@@ -32,9 +33,9 @@ import { Label } from "@workspace/ui/components/label"
 
 import type { InboundRow } from "./types"
 
-// 标签画布上的单个元素。
-// bordered=true 时画一个描边框、文字居中，用来表达“条形码占位”；
-// 其它情况就是纯文字块。把两种元素合并成同一种结构，省一套类型分支。
+// 标签画布上的单个元素。kind 决定渲染方式：
+//   text    — 纯文本块
+//   barcode — 通过 react-barcode 生成真实 CODE128 SVG
 interface LabelElement {
   id: string
   x: number
@@ -43,12 +44,19 @@ interface LabelElement {
   h: number
   fontSize: number
   bold: boolean
-  bordered: boolean
+  kind: "text" | "barcode"
   content: string
+}
+
+interface DynamicColumn {
+  id: string
+  headerName: string
 }
 
 interface PrintLabelDialogProps {
   row: InboundRow | null
+  /** 动态扩展列定义；用来把 row.ext 里的值按表头渲染到标签上 */
+  dynamicColumns?: readonly DynamicColumn[]
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -56,12 +64,22 @@ interface PrintLabelDialogProps {
 // 标签画布默认尺寸，单位 px。布局用绝对定位 + 这个宽高组合出坐标系，
 // 打印 / 导出都会复用同一套坐标，所以这里定死比较省心。
 const CANVAS_WIDTH = 400
-const CANVAS_HEIGHT = 300
+const CANVAS_HEIGHT = 320
 
-// 根据行数据生成默认元素布局。字段顺序和图片里的示意风格对齐：
-// 顶部一个大单号、下面一列 key-value、最底是条形码占位。
-function buildInitialElements(row: InboundRow): LabelElement[] {
-  const lines: Array<{ content: string; bold?: boolean; fontSize?: number }> = [
+// 用一段内联样式让 react-barcode 生成的 SVG 按容器等比缩放填满。
+// 这段样式既要在编辑画布里生效，也要能被导出/打印用的离屏节点带走。
+const BARCODE_FIT_CSS = `.barcode-fit > svg { width: 100% !important; height: 100% !important; display: block; }`
+
+// 根据行数据 + 动态扩展列生成默认元素布局：顶部大单号 → 一列 key:value → 底部条形码。
+function buildInitialElements(
+  row: InboundRow,
+  dynamicColumns: readonly DynamicColumn[] = [],
+): LabelElement[] {
+  const baseLines: Array<{
+    content: string
+    bold?: boolean
+    fontSize?: number
+  }> = [
     { content: row.id, bold: true, fontSize: 20 },
     { content: `商品：${row.product}` },
     { content: `SKU：${row.sku}` },
@@ -71,40 +89,82 @@ function buildInitialElements(row: InboundRow): LabelElement[] {
     { content: `日期：${row.date}` },
   ]
 
-  const elements: LabelElement[] = lines.map((line, i) => ({
-    id: `el-${i}`,
-    x: 16,
-    y: i === 0 ? 10 : 42 + (i - 1) * 26,
-    w: CANVAS_WIDTH - 32,
-    h: i === 0 ? 28 : 22,
-    fontSize: line.fontSize ?? 14,
-    bold: line.bold ?? false,
-    bordered: false,
-    content: line.content,
-  }))
+  for (const col of dynamicColumns) {
+    const v = row.ext?.[col.id] ?? ""
+    baseLines.push({ content: `${col.headerName}：${v}` })
+  }
 
+  const titleY = 10
+  const titleH = 28
+  const lineGap = 4
+  const lineH = 22
+  let y = titleY + titleH + lineGap
+
+  const elements: LabelElement[] = baseLines.map((line, i) => {
+    if (i === 0) {
+      return {
+        id: `el-${i}`,
+        x: 16,
+        y: titleY,
+        w: CANVAS_WIDTH - 32,
+        h: titleH,
+        fontSize: line.fontSize ?? 14,
+        bold: line.bold ?? false,
+        kind: "text",
+        content: line.content,
+      }
+    }
+    const el: LabelElement = {
+      id: `el-${i}`,
+      x: 16,
+      y,
+      w: CANVAS_WIDTH - 32,
+      h: lineH,
+      fontSize: line.fontSize ?? 14,
+      bold: line.bold ?? false,
+      kind: "text",
+      content: line.content,
+    }
+    y += lineH + lineGap
+    return el
+  })
+
+  const barcodeH = 64
+  const barcodeY = Math.min(y + 4, CANVAS_HEIGHT - barcodeH - 6)
   elements.push({
     id: "el-barcode",
     x: 16,
-    y: 230,
+    y: barcodeY,
     w: CANVAS_WIDTH - 32,
-    h: 50,
-    fontSize: 14,
+    h: barcodeH,
+    fontSize: 12,
     bold: false,
-    bordered: true,
-    content: "条形码",
+    kind: "barcode",
+    content: row.id,
   })
 
   return elements
 }
 
-// 每个元素在画布里的 inline-style。编辑态 / 静态渲染共用这套样式，
-// 导出图片 & 新窗口打印才能和编辑预览 1:1 一致。
+// 元素容器样式。barcode 不需要内边距 / 文本对齐，让 SVG 自己占满。
 function toElementStyle(el: LabelElement): CSSProperties {
+  if (el.kind === "barcode") {
+    return {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "100%",
+      height: "100%",
+      padding: 0,
+      boxSizing: "border-box",
+      background: "transparent",
+      overflow: "hidden",
+    }
+  }
   return {
     display: "flex",
     alignItems: "center",
-    justifyContent: el.bordered ? "center" : "flex-start",
+    justifyContent: "flex-start",
     width: "100%",
     height: "100%",
     padding: "2px 6px",
@@ -113,13 +173,36 @@ function toElementStyle(el: LabelElement): CSSProperties {
     fontWeight: el.bold ? 700 : 400,
     lineHeight: 1.2,
     color: "#111",
-    border: el.bordered ? "1px solid #9ca3af" : "none",
-    borderRadius: el.bordered ? 4 : 0,
     background: "transparent",
     userSelect: "none",
     whiteSpace: "pre-wrap",
     wordBreak: "break-all",
   }
+}
+
+// 单个元素内容的渲染。barcode 走 react-barcode 的 svg renderer，
+// 父级 .barcode-fit 的 CSS 会把 SVG 强制缩放到容器大小。
+function renderElementContent(el: LabelElement) {
+  if (el.kind === "barcode") {
+    const value = el.content?.trim() ? el.content : "0000000000"
+    return (
+      <div className="barcode-fit" style={{ width: "100%", height: "100%" }}>
+        <Barcode
+          value={value}
+          format="CODE128"
+          renderer="svg"
+          displayValue
+          fontSize={Math.max(el.fontSize, 10)}
+          height={Math.max(el.h - 20, 20)}
+          width={1.6}
+          margin={0}
+          background="#ffffff"
+          lineColor="#000000"
+        />
+      </div>
+    )
+  }
+  return el.content
 }
 
 // 静态标签渲染：不依赖 react-rnd，只用 absolute 定位。
@@ -141,6 +224,8 @@ const StaticLabel = forwardRef<
         overflow: "hidden",
       }}
     >
+      {/* 把 .barcode-fit 的样式塞进 outerHTML，保证新窗口打印时也能缩放 */}
+      <style>{BARCODE_FIT_CSS}</style>
       {elements.map((el) => (
         <div
           key={el.id}
@@ -152,7 +237,7 @@ const StaticLabel = forwardRef<
             height: el.h,
           }}
         >
-          <div style={toElementStyle(el)}>{el.content}</div>
+          <div style={toElementStyle(el)}>{renderElementContent(el)}</div>
         </div>
       ))}
     </div>
@@ -161,6 +246,7 @@ const StaticLabel = forwardRef<
 
 export function PrintLabelDialog({
   row,
+  dynamicColumns,
   open,
   onOpenChange,
 }: PrintLabelDialogProps) {
@@ -168,14 +254,14 @@ export function PrintLabelDialog({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const staticRef = useRef<HTMLDivElement>(null)
 
-  // dialog 每次重新打开或切换 row，都把画布重置成默认布局。
+  // dialog 每次重新打开或切换 row / 列定义，都把画布重置成默认布局。
   // 不做持久化，符合“临时编辑”的定位；需要保存模板的话往这里接 store 即可。
   useEffect(() => {
     if (open && row) {
-      setElements(buildInitialElements(row))
+      setElements(buildInitialElements(row, dynamicColumns ?? []))
       setSelectedId(null)
     }
-  }, [open, row])
+  }, [open, row, dynamicColumns])
 
   const selected = useMemo(
     () => elements.find((e) => e.id === selectedId) ?? null,
@@ -203,7 +289,7 @@ export function PrintLabelDialog({
         h: 24,
         fontSize: 14,
         bold: false,
-        bordered: false,
+        kind: "text",
         content: "新文本",
       },
     ])
@@ -219,11 +305,11 @@ export function PrintLabelDialog({
         x: 40,
         y: 200,
         w: 240,
-        h: 50,
-        fontSize: 14,
+        h: 60,
+        fontSize: 12,
         bold: false,
-        bordered: true,
-        content: "条形码",
+        kind: "barcode",
+        content: row?.id ?? "0000000000",
       },
     ])
     setSelectedId(id)
@@ -306,7 +392,7 @@ ${html}
           </Button>
           <Button size="sm" variant="outline" onClick={addBarcode}>
             <IconBarcode className="size-4" />
-            新增条形码框
+            新增条形码
           </Button>
           <Button
             size="sm"
@@ -332,11 +418,13 @@ ${html}
         <div className="grid gap-4 md:grid-cols-[1fr_240px]">
           {/* 编辑画布：灰底 + 白画布，白画布外就是 canvas 边界之外 */}
           <div
-            className="bg-muted/40 flex min-h-[340px] items-center justify-center rounded-md border p-4"
+            className="bg-muted/40 flex min-h-[360px] items-center justify-center rounded-md border p-4"
             onMouseDown={(e) => {
               if (e.target === e.currentTarget) setSelectedId(null)
             }}
           >
+            {/* 编辑态也要这份样式，barcode 才能按拉拽的 w/h 缩放 */}
+            <style>{BARCODE_FIT_CSS}</style>
             <div
               style={{
                 position: "relative",
@@ -380,7 +468,7 @@ ${html}
                       onMouseDown={() => setSelectedId(el.id)}
                       style={toElementStyle(el)}
                     >
-                      {el.content}
+                      {renderElementContent(el)}
                     </div>
                   </Rnd>
                 )
@@ -388,7 +476,7 @@ ${html}
             </div>
           </div>
 
-          {/* 右侧属性面板：只对选中元素生效，内容 / 字号 / 粗体 / 描边框 */}
+          {/* 右侧属性面板：只对选中元素生效，内容 / 字号 / 粗体（仅文本）/ 类型互转 */}
           <aside className="flex flex-col gap-3 rounded-md border p-3">
             <div className="text-muted-foreground text-xs font-medium">
               {selected ? "编辑选中元素" : "点击画布中的元素进行编辑"}
@@ -397,7 +485,7 @@ ${html}
               <>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="label-content" className="text-xs">
-                    内容
+                    {selected.kind === "barcode" ? "条形码值" : "内容"}
                   </Label>
                   <Input
                     id="label-content"
@@ -424,25 +512,29 @@ ${html}
                     }
                   />
                 </div>
+                {selected.kind === "text" && (
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selected.bold}
+                      onChange={(e) =>
+                        patchElement(selected.id, { bold: e.target.checked })
+                      }
+                    />
+                    加粗
+                  </label>
+                )}
                 <label className="flex cursor-pointer items-center gap-2 text-xs">
                   <input
                     type="checkbox"
-                    checked={selected.bold}
+                    checked={selected.kind === "barcode"}
                     onChange={(e) =>
-                      patchElement(selected.id, { bold: e.target.checked })
+                      patchElement(selected.id, {
+                        kind: e.target.checked ? "barcode" : "text",
+                      })
                     }
                   />
-                  加粗
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={selected.bordered}
-                    onChange={(e) =>
-                      patchElement(selected.id, { bordered: e.target.checked })
-                    }
-                  />
-                  带描边框（条形码样式）
+                  渲染为条形码
                 </label>
                 <div className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
                   位置 x:{Math.round(selected.x)} y:{Math.round(selected.y)}

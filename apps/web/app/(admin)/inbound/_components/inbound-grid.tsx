@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useId, useMemo, useRef, useState } from "react"
 import { useTheme } from "next-themes"
 
 import {
@@ -10,6 +10,8 @@ import {
   type CellValueChangedEvent,
   type ColDef,
   type GridReadyEvent,
+  type ValueGetterParams,
+  type ValueSetterParams,
 } from "ag-grid-community"
 import { AG_GRID_LOCALE_CN } from "@ag-grid-community/locale"
 import {
@@ -18,9 +20,25 @@ import {
   type CustomCellRendererProps,
 } from "ag-grid-react"
 
-import { IconFilter, IconFilterOff, IconPrinter } from "@tabler/icons-react"
+import {
+  IconColumnInsertRight,
+  IconFilter,
+  IconFilterOff,
+  IconPrinter,
+  IconRowInsertTop,
+} from "@tabler/icons-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import { Input } from "@workspace/ui/components/input"
+import { Label } from "@workspace/ui/components/label"
 
 import {
   InboundFilterForm,
@@ -152,10 +170,16 @@ const INITIAL_ROWS: InboundRow[] = [
 function matchesCriteria(row: InboundRow, c: InboundCriteria): boolean {
   if (c.keyword) {
     const kw = c.keyword.toLowerCase()
+    const extBlob = row.ext
+      ? Object.values(row.ext)
+          .join(" ")
+          .toLowerCase()
+      : ""
     const hit =
       row.id.toLowerCase().includes(kw) ||
       row.sku.toLowerCase().includes(kw) ||
-      row.product.toLowerCase().includes(kw)
+      row.product.toLowerCase().includes(kw) ||
+      extBlob.includes(kw)
     if (!hit) return false
   }
   if (c.supplier && row.supplier !== c.supplier) return false
@@ -166,9 +190,39 @@ function matchesCriteria(row: InboundRow, c: InboundCriteria): boolean {
   return true
 }
 
+interface DynamicCol {
+  id: string
+  headerName: string
+}
+
+function createDynamicCol(headerName: string): DynamicCol {
+  return {
+    id: `dyn_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    headerName,
+  }
+}
+
+function emptyRowForDynamicCols(dyn: DynamicCol[]): InboundRow {
+  const ext =
+    dyn.length > 0 ? Object.fromEntries(dyn.map((c) => [c.id, ""])) : undefined
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    id: `IN-${Date.now()}`,
+    sku: "",
+    product: "",
+    batch: "",
+    qty: 0,
+    date: today,
+    supplier: "华源",
+    status: "已入库",
+    ext,
+  }
+}
+
 export function InboundGrid() {
   const { resolvedTheme } = useTheme()
-  const [rawRows] = useState<InboundRow[]>(INITIAL_ROWS)
+  const [rawRows, setRawRows] = useState<InboundRow[]>(INITIAL_ROWS)
+  const [dynamicColumns, setDynamicColumns] = useState<DynamicCol[]>([])
   // form 的实时 state 放在 form 内部；外部这里只存“已提交”的筛选条件，
   // 保证只有用户点“查询”才会真正过滤 grid 数据。
   const [criteria, setCriteria] = useState<InboundCriteria>({})
@@ -178,6 +232,11 @@ export function InboundGrid() {
   // 打印标签弹窗的 row 与 open 状态由父级持有，dialog 做受控组件。
   const [printRow, setPrintRow] = useState<InboundRow | null>(null)
   const [printOpen, setPrintOpen] = useState(false)
+
+  const addColumnNameId = useId()
+  const [addColumnOpen, setAddColumnOpen] = useState(false)
+  const [addColumnName, setAddColumnName] = useState("")
+  const [addColumnNameError, setAddColumnNameError] = useState("")
 
   const gridApiRef = useRef<GridReadyEvent<InboundRow>["api"] | null>(null)
   const handleGridReady = (e: GridReadyEvent<InboundRow>) => {
@@ -210,73 +269,122 @@ export function InboundGrid() {
     [rawRows, criteria],
   )
 
+  const addRow = useCallback(() => {
+    setRawRows((prev) => [...prev, emptyRowForDynamicCols(dynamicColumns)])
+  }, [dynamicColumns])
+
+  const onAddColumnDialogOpenChange = useCallback((open: boolean) => {
+    setAddColumnOpen(open)
+    if (!open) {
+      setAddColumnName("")
+      setAddColumnNameError("")
+    }
+  }, [])
+
+  const openAddColumnDialog = useCallback(() => {
+    setAddColumnName("")
+    setAddColumnNameError("")
+    setAddColumnOpen(true)
+  }, [])
+
+  const confirmAddColumn = useCallback(() => {
+    const name = addColumnName.trim()
+    if (!name) {
+      setAddColumnNameError("请填写列名称")
+      return
+    }
+    setAddColumnNameError("")
+    setDynamicColumns((prev) => [...prev, createDynamicCol(name)])
+    setAddColumnOpen(false)
+    setAddColumnName("")
+  }, [addColumnName])
+
   const columnDefs = useMemo<ColDef<InboundRow>[]>(
-    () => [
-      // 主键类字段不让编辑，防止误改把行“认不出来”。
-      {
-        field: "id",
-        headerName: "入库单号",
-        minWidth: 180,
-        // pinned: "left",
-        editable: false,
-      },
-      { field: "sku", headerName: "SKU", minWidth: 120, editable: false },
-      { field: "product", headerName: "商品名称", minWidth: 180, flex: 1 },
-      { field: "batch", headerName: "批次号", minWidth: 140, editable: false },
-      {
-        field: "qty",
-        headerName: "数量",
-        minWidth: 100,
-        filter: "agNumberColumnFilter",
-        type: "numericColumn",
-        cellEditor: "agNumberCellEditor",
-        cellEditorParams: { min: 0, precision: 0 },
-      },
-      {
-        field: "date",
-        headerName: "入库日期",
-        minWidth: 130,
-        cellEditor: "agDateStringCellEditor",
-        filter: "agDateColumnFilter",
-      },
-      {
-        // 供应商 / 状态 这类字典型字段由上方 form 的下拉筛（值从字典管理配），
-        // 列上的 floatingFilter 与字典本身会“打架”，所以这里显式关掉列内筛选；
-        // 编辑态改用 select 下拉，避免用户敲出字典外的自由值。
-        field: "supplier",
-        headerName: "供应商",
-        minWidth: 120,
-        filter: false,
-        floatingFilter: false,
-        cellEditor: "agSelectCellEditor",
-        cellEditorParams: { values: [...SUPPLIER_OPTIONS] },
-      },
-      {
-        field: "status",
-        headerName: "状态",
-        minWidth: 110,
-        filter: false,
-        floatingFilter: false,
-        cellEditor: "agSelectCellEditor",
-        cellEditorParams: { values: [...STATUS_OPTIONS] },
-      },
-      // 操作列：右侧固定、不可编辑/排序/筛选/拖动，保证始终可见。
-      // 回调通过 grid context 注入，cellRenderer 里读 params.context。
-      {
-        headerName: "操作",
-        colId: "actions",
-        pinned: "right",
-        minWidth: 120,
-        maxWidth: 140,
-        sortable: false,
-        filter: false,
-        editable: false,
-        resizable: false,
-        suppressMovable: true,
-        cellRenderer: ActionCell,
-      },
-    ],
-    [],
+    () => {
+      const dynamicColDefs: ColDef<InboundRow>[] = dynamicColumns.map(
+        (col) => ({
+          colId: col.id,
+          headerName: col.headerName,
+          minWidth: 100,
+          flex: 0,
+          sortable: true,
+          filter: true,
+          resizable: true,
+          valueGetter: (p: ValueGetterParams<InboundRow, InboundGridContext>) =>
+            p.data?.ext?.[col.id] ?? "",
+          valueSetter: (p: ValueSetterParams<InboundRow, InboundGridContext>) => {
+            if (!p.data) return false
+            const s = p.newValue != null ? String(p.newValue) : ""
+            p.data.ext = { ...p.data.ext, [col.id]: s }
+            return true
+          },
+        }),
+      )
+      return [
+        {
+          field: "id",
+          headerName: "入库单号",
+          minWidth: 180,
+          // pinned: "left",
+        },
+        { field: "sku", headerName: "SKU", minWidth: 120 },
+        { field: "product", headerName: "商品名称", minWidth: 180, flex: 1 },
+        { field: "batch", headerName: "批次号", minWidth: 140 },
+        {
+          field: "qty",
+          headerName: "数量",
+          minWidth: 100,
+          filter: "agNumberColumnFilter",
+          type: "numericColumn",
+          cellEditor: "agNumberCellEditor",
+          cellEditorParams: { min: 0, precision: 0 },
+        },
+        {
+          field: "date",
+          headerName: "入库日期",
+          minWidth: 130,
+          cellEditor: "agDateStringCellEditor",
+          filter: "agDateColumnFilter",
+        },
+        {
+          // 供应商 / 状态 这类字典型字段由上方 form 的下拉筛（值从字典管理配），
+          // 列上的 floatingFilter 与字典本身会“打架”，所以这里显式关掉列内筛选；
+          // 编辑态改用 select 下拉，避免用户敲出字典外的自由值。
+          field: "supplier",
+          headerName: "供应商",
+          minWidth: 120,
+          filter: false,
+          floatingFilter: false,
+          cellEditor: "agSelectCellEditor",
+          cellEditorParams: { values: [...SUPPLIER_OPTIONS] },
+        },
+        {
+          field: "status",
+          headerName: "状态",
+          minWidth: 110,
+          filter: false,
+          floatingFilter: false,
+          cellEditor: "agSelectCellEditor",
+          cellEditorParams: { values: [...STATUS_OPTIONS] },
+        },
+        ...dynamicColDefs,
+        // 操作列：按钮区，非数据编辑；保持不可编辑避免弹出文本编辑器盖住按钮。
+        {
+          headerName: "操作",
+          colId: "actions",
+          pinned: "right",
+          minWidth: 120,
+          maxWidth: 140,
+          sortable: false,
+          filter: false,
+          editable: false,
+          resizable: false,
+          suppressMovable: true,
+          cellRenderer: ActionCell,
+        },
+      ]
+    },
+    [dynamicColumns],
   )
 
   const defaultColDef = useMemo<ColDef>(
@@ -285,7 +393,7 @@ export function InboundGrid() {
       filter: true,
       resizable: true,
       floatingFilter: showColumnFilter,
-      // 点一下就进入编辑；主键列单独 editable:false 覆盖即可。
+      // 点一下进入编辑；操作列在列定义里单独 editable:false。
       editable: true,
     }),
     [showColumnFilter],
@@ -319,21 +427,44 @@ export function InboundGrid() {
         <div className="flex items-center justify-between border-b px-4 py-2">
           <span className="text-muted-foreground text-xs">
             共 {rowData.length} 条
+            {dynamicColumns.length > 0
+              ? `（含 ${dynamicColumns.length} 个扩展列）`
+              : null}
           </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={toggleColumnFilter}
-            aria-pressed={showColumnFilter}
-          >
-            {showColumnFilter ? (
-              <IconFilterOff className="size-4" />
-            ) : (
-              <IconFilter className="size-4" />
-            )}
-            {showColumnFilter ? "关闭列筛选" : "开启列筛选"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addRow}
+            >
+              <IconRowInsertTop className="size-4" />
+              添加行
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={openAddColumnDialog}
+            >
+              <IconColumnInsertRight className="size-4" />
+              添加列
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={toggleColumnFilter}
+              aria-pressed={showColumnFilter}
+            >
+              {showColumnFilter ? (
+                <IconFilterOff className="size-4" />
+              ) : (
+                <IconFilter className="size-4" />
+              )}
+              {showColumnFilter ? "关闭列筛选" : "开启列筛选"}
+            </Button>
+          </div>
         </div>
         <div className="h-[600px] w-full" data-ag-theme-mode={themeMode}>
           <AgGridReact<InboundRow>
@@ -354,8 +485,64 @@ export function InboundGrid() {
           />
         </div>
       </div>
+      <Dialog open={addColumnOpen} onOpenChange={onAddColumnDialogOpenChange}>
+        <DialogContent className="sm:max-w-md" showCloseButton>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              confirmAddColumn()
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>添加扩展列</DialogTitle>
+              <DialogDescription>输入在表头显示的列名称，可与其他列重名；内部 id 会单独生成。</DialogDescription>
+            </DialogHeader>
+            <div className="py-2">
+              <Label htmlFor={addColumnNameId} className="text-foreground">
+                列名称
+              </Label>
+              <Input
+                id={addColumnNameId}
+                className="mt-1.5"
+                value={addColumnName}
+                onChange={(e) => {
+                  setAddColumnName(e.target.value)
+                  if (addColumnNameError) setAddColumnNameError("")
+                }}
+                placeholder="例如：备注、仓位号"
+                autoFocus
+                autoComplete="off"
+                aria-invalid={Boolean(addColumnNameError)}
+                aria-describedby={
+                  addColumnNameError ? "add-column-name-error" : undefined
+                }
+              />
+              {addColumnNameError ? (
+                <p
+                  id="add-column-name-error"
+                  className="text-destructive mt-1.5 text-xs"
+                  role="alert"
+                >
+                  {addColumnNameError}
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onAddColumnDialogOpenChange(false)}
+              >
+                取消
+              </Button>
+              <Button type="submit">确定</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <PrintLabelDialog
         row={printRow}
+        dynamicColumns={dynamicColumns}
         open={printOpen}
         onOpenChange={setPrintOpen}
       />
