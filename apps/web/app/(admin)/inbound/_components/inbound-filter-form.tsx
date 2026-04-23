@@ -18,7 +18,7 @@ import {
 // 字典型候选值集中在这里，后续接入字典接口时只需把这两个常量换成
 // useQuery 的结果即可（form 不需要改动）。
 export const SUPPLIER_OPTIONS = ["华源", "顺丰", "京东物流"] as const
-export const STATUS_OPTIONS = ["已入库", "在途", "待检"] as const
+export const STATUS_OPTIONS = ["已入库", "在途", "待检", "已返库"] as const
 
 export interface InboundCriteria {
   keyword?: string
@@ -35,9 +35,15 @@ const ALL = "__all__"
 interface InboundFilterFormProps {
   onSubmit: (criteria: InboundCriteria) => void
   onReset: () => void
+  /** 日期筛选字段的标签文案，默认为“入库日期”，出库页可传“出库日期”。 */
+  dateLabel?: string
 }
 
-export function InboundFilterForm({ onSubmit, onReset }: InboundFilterFormProps) {
+export function InboundFilterForm({
+  onSubmit,
+  onReset,
+  dateLabel = "入库日期",
+}: InboundFilterFormProps) {
   const [keyword, setKeyword] = useState("")
   const [supplier, setSupplier] = useState<string>(ALL)
   const [status, setStatus] = useState<string>(ALL)
@@ -116,7 +122,7 @@ export function InboundFilterForm({ onSubmit, onReset }: InboundFilterFormProps)
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label>入库日期</Label>
+        <Label>{dateLabel}</Label>
         <div className="flex items-center gap-1.5">
           <Input
             type="date"
