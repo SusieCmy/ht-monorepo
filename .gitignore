@@ -27,6 +27,7 @@ out/
 build
 dist
 .cursor
+.spec-workflow
 
 
 # Debug
