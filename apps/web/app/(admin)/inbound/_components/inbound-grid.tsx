@@ -16,7 +16,6 @@ import {
   themeQuartz,
   type CellValueChangedEvent,
   type ColDef,
-  type IHeaderParams,
   type ValueGetterParams,
   type ValueSetterParams,
 } from "ag-grid-community"
@@ -25,6 +24,7 @@ import {
   AgGridProvider,
   AgGridReact,
   type CustomCellRendererProps,
+  type CustomInnerHeaderProps,
 } from "ag-grid-react"
 
 import {
@@ -75,7 +75,7 @@ interface InboundGridContext {
 // 新列名通过 grid context 回写到父级 state；固定列走 headerOverrides，
 // 动态列走 dynamicColumns，两边都按 colId 识别。
 function EditableHeader(
-  params: IHeaderParams<InboundRow, InboundGridContext>,
+  params: CustomInnerHeaderProps<InboundRow, InboundGridContext>,
 ) {
   const { displayName, column, context } = params
   const colId = column.getColId()
@@ -506,8 +506,9 @@ export function InboundGrid({ variant = "inbound" }: InboundGridProps = {}) {
         headerOverrides[colId] ?? base
       // 所有数据列复用的表头扩展：innerHeaderComponent 只替换文字块，
       // 排序箭头 / 过滤器按钮等仍由 AG Grid 自带的外层 header 渲染。
+      // 按 AG Grid 35 文档，innerHeaderComponent 需挂在 headerComponentParams 下。
       const editableHeader = {
-        innerHeaderComponent: EditableHeader,
+        headerComponentParams: { innerHeaderComponent: EditableHeader },
         headerTooltip: "双击修改列名",
       } as const
 

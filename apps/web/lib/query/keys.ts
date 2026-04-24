@@ -82,6 +82,14 @@ export function createEntityKeys<TId extends SerializablePrimitive = string>(
  */
 export const queryKeys = {
   users: createEntityKeys<string>("admin", "users"),
+  // 动态表格配置：一条配置 = 一张可定制列的表（入库 / 出库 / 预警 …）。
+  sheetConfigs: createEntityKeys<number>("sheets", "configs"),
+  // 动态表格行数据：通过 list({ sheetId }) 拿某张表的全部行。
+  sheetRows: createEntityKeys<number>("sheets", "rows"),
+  // 字典类型：例如 product_type / warehouse / stock_status。
+  dictTypes: createEntityKeys<string>("dict", "types"),
+  // 字典项：通过 list({ typeCode }) 拿某个类型下的所有 items。
+  dictItems: createEntityKeys<number>("dict", "items"),
 } as const
 
 export type QueryKeys = typeof queryKeys

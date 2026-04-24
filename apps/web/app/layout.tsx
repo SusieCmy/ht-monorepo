@@ -1,6 +1,8 @@
 import { Geist_Mono, Instrument_Sans } from "next/font/google"
 
 import "@workspace/ui/globals.css"
+import { ConfirmProvider } from "@/components/feedback/confirm-provider"
+import { ToastProvider } from "@/components/feedback/toast-provider"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { ThemeProvider } from "@/components/providers/theme-provider"
 import { cn } from "@workspace/ui/lib/utils";
@@ -25,7 +27,11 @@ export default function RootLayout({
     >
       <body>
         <QueryProvider>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider>
+            <ToastProvider>
+              <ConfirmProvider>{children}</ConfirmProvider>
+            </ToastProvider>
+          </ThemeProvider>
         </QueryProvider>
       </body>
     </html>

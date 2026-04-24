@@ -27,8 +27,22 @@ interface RequestOptions extends Omit<RequestInit, "body" | "signal"> {
   baseUrl?: string
 }
 
+/**
+ * 统一计算 baseUrl：
+ *  - 浏览器端：优先用 `NEXT_PUBLIC_API_BASE_URL`（项目里通常是 `/api`，
+ *    由 next.config.mjs 的 rewrites 反代到真实后端，避免 CORS）。
+ *  - 服务端（RSC / Route Handler / SSR 预取）：Node 的 fetch 不支持相对路径，
+ *    这里改用 `NEXT_PUBLIC_API_ORIGIN`（后端真实地址）直连，省去一次 rewrite
+ *    兜圈子。
+ *  - 调用点若显式传 `baseUrl`，则一切以它为准。
+ */
 function resolveBaseUrl(override?: string) {
   if (override) return override.replace(/\/$/, "")
+  const isServer = typeof window === "undefined"
+  if (isServer) {
+    const origin = process.env.NEXT_PUBLIC_API_ORIGIN
+    if (origin) return origin.replace(/\/$/, "")
+  }
   const envBase = process.env.NEXT_PUBLIC_API_BASE_URL
   return envBase ? envBase.replace(/\/$/, "") : ""
 }
