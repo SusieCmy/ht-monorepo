@@ -372,6 +372,12 @@ export interface SheetGridProps {
   hidePrintRowAction?: boolean
   /** 隐藏内置"删除"按钮。默认保留 —— 即便只读视图也需要手动清理。 */
   hideDeleteRowAction?: boolean
+  /**
+   * 完全不渲染"操作"列。用于纯展示/派生视图（例如预警页）：
+   * 即使 rowActions 为空，SheetGrid 默认还是会出一个空白操作列占位，
+   * 视觉上冗余；打开这个开关整列都不会生成。
+   */
+  hideActionsColumn?: boolean
   /** 隐藏整个查询筛选面板（预警页有固定条件，不让用户乱搞）。 */
   hideFilterPanel?: boolean
   /**
@@ -384,6 +390,18 @@ export interface SheetGridProps {
    * 同样需要引用稳定，内部用 JSON.stringify 记忆化。
    */
   forcedFilters?: SheetRowFilters
+  /**
+   * 外部提供的行数据：传了就接管 SheetGrid 的行查询，内置 sheetRowListOptions
+   * 被跳过，仅渲染传进来的数据。用途：
+   *   - 预警页需要调 /alert-rule/hits（每商品独立阈值），不能用通用 filter 表达；
+   *   - 其它"派生视图"场景（例如跨表统计，后端返回 SheetRow 形态的聚合结果）。
+   *
+   * 注意：提供 rowsOverride 时，`rowsOverrideLoading` 和 `rowsOverrideError`
+   * 应一并传入，否则 SheetGrid 无法正确展示 loading / error 状态。
+   */
+  rowsOverride?: SheetRow[]
+  rowsOverrideLoading?: boolean
+  rowsOverrideError?: Error | null
 }
 
 export function SheetGrid({
@@ -393,8 +411,12 @@ export function SheetGrid({
   readOnly = false,
   hidePrintRowAction = false,
   hideDeleteRowAction = false,
+  hideActionsColumn = false,
   hideFilterPanel = false,
   forcedFilters,
+  rowsOverride,
+  rowsOverrideLoading,
+  rowsOverrideError,
 }: SheetGridProps) {
   const { resolvedTheme } = useTheme()
   const themeMode = resolvedTheme === "dark" ? "dark" : "light"
@@ -469,13 +491,18 @@ export function SheetGrid({
   // FiltersState 与 SheetRowFilters 字段完全相同，只是 options/sheet-rows 的
   // 类型额外带了 SerializableObject 的索引签名（给 queryKey 用）。
   // 这里做一次结构断言，比每个字段手搓一遍更稳。
-  const rowsQuery = useQuery(
-    options.sheetRows.sheetRowListOptions({
+  // rowsOverride 生效时禁用内置查询，避免对 /sheet-row-index 发无效请求。
+  const rowsQuery = useQuery({
+    ...options.sheetRows.sheetRowListOptions({
       sheetId,
       filters: effectiveFilters,
     }),
-  )
-  const rows = rowsQuery.data ?? []
+    enabled:
+      rowsOverride === undefined &&
+      Number.isFinite(sheetId) &&
+      sheetId > 0,
+  })
+  const rows = rowsOverride ?? rowsQuery.data ?? []
 
   // 收集表里用到的所有字典 code，并一次性并发拉取它们各自的 items。
   // 返回一个 Map<typeCode, DictItem[]>，给单元格编辑器/展示用。
@@ -733,6 +760,11 @@ export function SheetGrid({
     const actionCount = (rowActions?.length ?? 0) + builtinCount
     const actionColWidth = Math.max(120, actionCount * 86)
 
+    if (hideActionsColumn) {
+      // 纯展示视图：不生成操作列。idCol 仍保留，毕竟行号是必要信息。
+      return [idCol, ...dataCols]
+    }
+
     return [
       idCol,
       ...dataCols,
@@ -747,7 +779,13 @@ export function SheetGrid({
         cellRenderer: RowActionCell,
       },
     ]
-  }, [columns, rowActions, hidePrintRowAction, hideDeleteRowAction])
+  }, [
+    columns,
+    rowActions,
+    hidePrintRowAction,
+    hideDeleteRowAction,
+    hideActionsColumn,
+  ])
 
   const defaultColDef = useMemo<ColDef>(
     () => ({
@@ -901,9 +939,17 @@ export function SheetGrid({
 
   const sheetName = configQuery.data?.name ?? ""
   const isConfigLoading = configQuery.isPending
-  const isRowsLoading = rowsQuery.isPending
+  const isRowsLoading =
+    rowsOverride !== undefined
+      ? Boolean(rowsOverrideLoading)
+      : rowsQuery.isPending
   const configError = configQuery.isError ? configQuery.error : null
-  const rowsError = rowsQuery.isError ? rowsQuery.error : null
+  const rowsError =
+    rowsOverride !== undefined
+      ? (rowsOverrideError ?? null)
+      : rowsQuery.isError
+        ? rowsQuery.error
+        : null
   const mutationPending =
     createRow.isPending ||
     updateRow.isPending ||

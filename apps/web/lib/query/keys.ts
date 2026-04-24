@@ -90,6 +90,10 @@ export const queryKeys = {
   dictTypes: createEntityKeys<string>("dict", "types"),
   // 字典项：通过 list({ typeCode }) 拿某个类型下的所有 items。
   dictItems: createEntityKeys<number>("dict", "items"),
+  // 预警规则：按 list({ sheetId }) 拿某张表的所有商品阈值配置。
+  alertRules: createEntityKeys<number>("alerts", "rules"),
+  // 预警命中行：按 list({ sheetId, productColumnId, stockColumnId, defaultThreshold }) 拿命中行。
+  alertHits: createEntityKeys<number>("alerts", "hits"),
 } as const
 
 export type QueryKeys = typeof queryKeys

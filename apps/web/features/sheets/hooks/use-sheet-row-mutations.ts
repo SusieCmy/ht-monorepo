@@ -1,14 +1,14 @@
 /**
- * 动态表格行的 CRUD mutations。
+ * ?????? CRUD mutations?
  *
- * 对应后端接口（iaxixi 项目 / Apifox）：
- *   POST   /sheet-row-index         新增行
- *   PATCH  /sheet-row-index/{id}    更新行（部分字段）
- *   DELETE /sheet-row-index/{id}    删除行
+ * ???????iaxixi ?? / Apifox??
+ *   POST   /sheet-row-index         ???
+ *   PATCH  /sheet-row-index/{id}    ?????????
+ *   DELETE /sheet-row-index/{id}    ???
  *
- * 乐观更新策略：增 / 改 / 删都先改 `queryKeys.sheetRows.list({ sheetId })`
- * 这份列表缓存，请求完成后再 invalidate 让服务端的真实值覆盖。这样在
- * 网络偏慢时用户也不会觉得表格卡顿。
+ * ???????? / ? / ???? `queryKeys.sheetRows.list({ sheetId })`
+ * ????????????? invalidate ??????????????
+ * ?????????????????
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query"
@@ -16,13 +16,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiRequest, queryKeys } from "@/lib/query"
 import type { SheetRow } from "@/lib/query/options/sheet-rows"
 
-/** 新增一行的入参：列值对象，空字符串也算合法值。 */
+/** ??????????????????????? */
 export interface CreateSheetRowInput {
   sheetId: number
   values: Record<string, string>
 }
 
-/** 更新一行的入参：只 patch 传入的 values；后端决定要不要做全量覆盖。 */
+/** ????????? patch ??? values?????????????? */
 export interface UpdateSheetRowInput {
   id: number
   sheetId: number
@@ -37,14 +37,32 @@ export interface DeleteSheetRowInput {
 type RowListKey = ReturnType<typeof queryKeys.sheetRows.list>
 
 /**
- * 一行的乐观临时 id：用负数避免和后端自增主键冲撞，后续 invalidate
- * 拿到真实 id 时会整体替换。
+ * ??????? id?????????????????? invalidate
+ * ???? id ???????
  */
 function tempRowId() {
   return -Date.now()
 }
 
-/** 新增一行：乐观插入到列表尾部。 */
+/**
+ * ??????????????????? / ?? / ?? / ????
+ * ???????????????? mutation ??? onSettled ?
+ * ?? invalidate `alertHits.lists()`?
+ *
+ * ????"??"???TanStack Query ???? observer ? key ??
+ * ? refetch?????????????????????
+ */
+function invalidateRowAndAlerts(
+  queryClient: ReturnType<typeof useQueryClient>,
+  listKey: RowListKey,
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: listKey }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.alertHits.lists() }),
+  ])
+}
+
+/** ??????????????? */
 export function useCreateSheetRow(sheetId: number) {
   const queryClient = useQueryClient()
   const listKey: RowListKey = queryKeys.sheetRows.list({ sheetId })
@@ -74,7 +92,6 @@ export function useCreateSheetRow(sheetId: number) {
       }
     },
     onSuccess: (created, _input, context) => {
-      // 请求拿到真 id 后，把乐观占位的那一行替换成真行。
       queryClient.setQueryData<SheetRow[]>(listKey, (current) => {
         if (!current) return [created]
         return current.map((row) =>
@@ -82,13 +99,11 @@ export function useCreateSheetRow(sheetId: number) {
         )
       })
     },
-    onSettled: () => {
-      return queryClient.invalidateQueries({ queryKey: listKey })
-    },
+    onSettled: () => invalidateRowAndAlerts(queryClient, listKey),
   })
 }
 
-/** 更新一行：乐观合并 values。 */
+/** ????????? values? */
 export function useUpdateSheetRow(sheetId: number) {
   const queryClient = useQueryClient()
   const listKey: RowListKey = queryKeys.sheetRows.list({ sheetId })
@@ -116,19 +131,17 @@ export function useUpdateSheetRow(sheetId: number) {
         queryClient.setQueryData(listKey, context.previous)
       }
     },
-    onSettled: () => {
-      return queryClient.invalidateQueries({ queryKey: listKey })
-    },
+    onSettled: () => invalidateRowAndAlerts(queryClient, listKey),
   })
 }
 
 /**
- * 批量新增多行：Excel 导入场景。
+ * ???????Excel ?????
  *
- * 和 useCreateSheetRow 的差异：
- *  - 不做乐观插入：导入几百条时乐观会让表格闪烁，且失败回滚成本高，
- *    这里选择"等服务端返回"，完成后只 invalidate 一次刷新真实数据。
- *  - 单次调用内部是一个事务（后端保证），所以要么全成功要么全失败。
+ * ? useCreateSheetRow ????
+ *  - ???????????????????????????????
+ *    ????"??????"????? invalidate ?????????
+ *  - ???????????????????????????????
  */
 export function useBulkCreateSheetRows(sheetId: number) {
   const queryClient = useQueryClient()
@@ -143,16 +156,22 @@ export function useBulkCreateSheetRows(sheetId: number) {
         },
       ),
     onSettled: () => {
-      // 一次性失效所有 sheetRows.list 变体（无 filter / 各种 filter 组合），
-      // 让无论用户当前正在看的是全量还是筛选后的视图，都能拿到新行。
-      return queryClient.invalidateQueries({
-        queryKey: queryKeys.sheetRows.lists(),
-      })
+      // ??????? sheetRows.list ???? filter / ?? filter ????
+      // ??????????????????????????????
+      // ?????????????
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.sheetRows.lists(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.alertHits.lists(),
+        }),
+      ])
     },
   })
 }
 
-/** 删除一行。 */
+/** ????? */
 export function useDeleteSheetRow(sheetId: number) {
   const queryClient = useQueryClient()
   const listKey: RowListKey = queryKeys.sheetRows.list({ sheetId })
@@ -173,8 +192,6 @@ export function useDeleteSheetRow(sheetId: number) {
         queryClient.setQueryData(listKey, context.previous)
       }
     },
-    onSettled: () => {
-      return queryClient.invalidateQueries({ queryKey: listKey })
-    },
+    onSettled: () => invalidateRowAndAlerts(queryClient, listKey),
   })
 }
